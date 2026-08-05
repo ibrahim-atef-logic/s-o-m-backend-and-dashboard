@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LogicRetail.Api/LogicRetail.Api.csproj" />
+    <Project Path="src/LogicRetail.Application/LogicRetail.Application.csproj" />
+    <Project Path="src/LogicRetail.Domain/LogicRetail.Domain.csproj" />
+    <Project Path="src/LogicRetail.Infrastructure/LogicRetail.Infrastructure.csproj" />
+    <Project Path="src/LogicRetail.Integrations.D365/LogicRetail.Integrations.D365.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LogicRetail.Api.Tests/LogicRetail.Api.Tests.csproj" />
+    <Project Path="tests/LogicRetail.Unit.Tests/LogicRetail.Unit.Tests.csproj" />
+  </Folder>
+</Solution>

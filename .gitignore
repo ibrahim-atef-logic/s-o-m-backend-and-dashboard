@@ -1,0 +1,13 @@
+﻿# Ignore
+**/bin/
+**/obj/
+**/.vs/
+**/TestResults/
+dashboard/build/
+dashboard/.dart_tool/
+dashboard/.idea/
+*.user
+.DS_Store
+.env
+**/.env
+backend-dotnet/src/LogicRetail.Api/data/store.json

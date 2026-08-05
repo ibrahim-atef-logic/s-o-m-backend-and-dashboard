@@ -1,0 +1,17 @@
+{
+  "RefreshTokens": [],
+  "LineJobs": [],
+  "LineJobItems": [],
+  "Companies": [
+    {
+      "Code": "logic-trial",
+      "Name": "Logic Trial",
+      "TenantId": "REPLACE_ME_TENANT_ID",
+      "ClientId": "REPLACE_ME_CLIENT_ID",
+      "ClientSecret": "REPLACE_ME_CLIENT_SECRET",
+      "FinOpsBaseUrl": "https://YOUR_ENV.operations.dynamics.com",
+      "IsActive": true,
+      "UpdatedAt": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

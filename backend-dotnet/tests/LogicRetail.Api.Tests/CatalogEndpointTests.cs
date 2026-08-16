@@ -224,7 +224,7 @@ public sealed class CatalogEndpointTests : IClassFixture<MockApiFactory>
             inventLocationId = "11",
         });
 
-        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        res.StatusCode.Should().Be(HttpStatusCode.Created);
         await ApiTestClient.AssertEnvelopeSuccessAsync(res);
         using var doc = await ApiTestClient.ReadJsonAsync(res);
         var data = doc.RootElement.GetProperty("data");

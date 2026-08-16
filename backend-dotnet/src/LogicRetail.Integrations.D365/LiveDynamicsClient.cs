@@ -448,9 +448,18 @@ public sealed class LiveDynamicsClient : IDynamicsClient
             var filter = new StringBuilder($"dataAreaId eq '{ODataEscaper.String(dataAreaId)}'");
             if (!string.IsNullOrWhiteSpace(search))
             {
+                // This environment rejects contains()/startswith() on every entity
+                // ("The type 'System.String' for the query operator is not Queryable!"),
+                // so search is an exact account match until D365 exposes a search entity.
                 var term = ODataEscaper.String(search.Trim());
-                filter.Append(
-                    $" and (contains(CustomerAccount,'{term}') or contains(OrganizationName,'{term}'))");
+                var upper = ODataEscaper.String(search.Trim().ToUpperInvariant());
+                filter.Append($" and (CustomerAccount eq '{term}'");
+                if (!string.Equals(term, upper, StringComparison.Ordinal))
+                {
+                    filter.Append($" or CustomerAccount eq '{upper}'");
+                }
+
+                filter.Append(')');
             }
 
             var rows = await _odata.QueryAsync(

@@ -281,7 +281,7 @@ public sealed class CatalogController : ControllerBase
             string.IsNullOrWhiteSpace(body.CurrencyCode) ? user.Currency : body.CurrencyCode,
             ct);
 
-        return Ok(ApiEnvelope.Ok(new
+        return StatusCode(StatusCodes.Status201Created, ApiEnvelope.Ok(new
         {
             salesOrderNumber = created.SalesOrderNumber,
             dataAreaId = created.DataAreaId,

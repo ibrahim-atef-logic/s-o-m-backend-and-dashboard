@@ -62,17 +62,20 @@ public sealed class LineJobsService
         }
 
         var header = await GetOpenSalesOrderAsync(salesId, company, workerRecId, ct);
+        // Price from header context: CustAccount / PriceGroupId + DataArea
         var price = await _dynamics.ResolvePriceAsync(
             itemNumber,
             company,
             header.CustAccount,
             header.PriceGroupId,
+            unitId: null,
             ct);
         if (price is null)
         {
             return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.NoPrice);
         }
 
+        // Stock from header.InventLocationId → InventoryWarehouseId
         var onHand = await _dynamics.GetWarehouseOnHandAsync(itemNumber, header.InventLocationId ?? string.Empty, ct);
         if (onHand is null)
         {
@@ -195,8 +198,15 @@ public sealed class LineJobsService
                 continue;
             }
 
-            var prices = await _dynamics.GetPriceAgreementsAsync(itemNumber, company, header.PriceGroupId, ct);
-            if (prices.Count == 0)
+            // Header-driven price: CustAccount OR PriceGroupId + barcode UnitID + DataArea
+            var price = await _dynamics.ResolvePriceAsync(
+                itemNumber,
+                company,
+                header.CustAccount,
+                header.PriceGroupId,
+                barcodeRow.UnitId,
+                ct);
+            if (price is null)
             {
                 anyFailed = true;
                 InsertFailed(jobId, itemId, barcode, itemNumber, qty, LineJobMessages.NoPrice);
@@ -204,6 +214,7 @@ public sealed class LineJobsService
                 continue;
             }
 
+            // Header-driven stock: InventLocationId → InventoryWarehouseId
             var onHand = await _dynamics.GetWarehouseOnHandAsync(itemNumber, header.InventLocationId ?? string.Empty, ct);
             if (onHand is null)
             {

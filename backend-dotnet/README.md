@@ -25,18 +25,29 @@ Listens on **http://0.0.0.0:3000** (same as the Flutter emulator `10.0.2.2:3000`
 
 Development defaults to **Live** credentials from `appsettings.Development.json` (trial sandbox). Use `Dynamics:Mode=Mock` for offline tests.
 
-## Auth (ERM-style)
+## Auth (mobile activation)
 
 ```http
 POST /api/v1/auth/login
-{ "company": "usmf", "personnelNumber": "1006", "password": "123" }
+{ "company": "logic-trial", "personnelNumber": "1006", "password": "123" }
 ```
 
-Validates against Dynamics entity `LogicRetailUserSetup_BI` with:
+`company` is the **admin registry / environment key** (unlocks D365 credentials), not the D365 DataArea.
 
-`PersonnelNumber` + `Password` + `IsActivated` + `GroupCompany`.
+The API calls D365 OData action `LogicRetailMobileUsersActivation_BI.AuthenticateUser`, then:
 
-JWT is scoped to that company. No separate company-select screen.
+- rejects `IsSuccess=false` (`401 AUTH_FAILED`)
+- rejects inactive accounts (`403 ACCOUNT_DISABLED` when `IsActive` or `UserInfoEnable` is false)
+- sets operating company = `InventLocationDataAreaId` else `Company`
+- returns JWT **plus the full activation payload** on `data.user` (channel, warehouse, currency, default customer, `needsWarehouseSelection`, …)
+
+Mobile must cache the entire `data` object. Subsequent catalog calls use `user.activeCompany` as `?company=`.
+
+```http
+POST /api/v1/auth/change-password
+Authorization: Bearer <accessToken>
+{ "oldPassword": "123", "newPassword": "1234" }
+```
 
 ## Contract tests
 

@@ -50,8 +50,48 @@ public sealed class AuthServiceTests : IDisposable
         result.Should().NotBeNull();
         var json = System.Text.Json.JsonSerializer.Serialize(result);
         json.Should().Contain("accessToken");
-        json.Should().Contain("logic-trial");
         json.Should().Contain("1006");
+        json.Should().Contain("MMS000WH");
+        json.Should().Contain("\"activeCompany\":\"mm\"");
+    }
+
+    [Fact]
+    public async Task Login_12344_succeeds_with_warehouse_selection_flag()
+    {
+        var result = await _sut.LoginAsync("logic-trial", "12344", "123", CancellationToken.None);
+        using var doc = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(result));
+        var user = doc.RootElement.GetProperty("user");
+        user.GetProperty("personnelNumber").GetString().Should().Be("12344");
+        user.GetProperty("activeCompany").GetString().Should().Be("PLTR");
+        user.GetProperty("needsWarehouseSelection").GetBoolean().Should().BeTrue();
+        user.GetProperty("activeWarehouse").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Login_disabled_account_throws_ACCOUNT_DISABLED()
+    {
+        var act = () => _sut.LoginAsync("usmf", "DISABLED", "123", CancellationToken.None);
+        var ex = await act.Should().ThrowAsync<AppException>();
+        ex.Which.Code.Should().Be("ACCOUNT_DISABLED");
+        ex.Which.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public async Task ChangePassword_wrong_old_throws_PASSWORD_CHANGE_FAILED()
+    {
+        var act = () => _sut.ChangePasswordAsync("1006", "bad", "1234", CancellationToken.None);
+        var ex = await act.Should().ThrowAsync<AppException>();
+        ex.Which.Code.Should().Be("PASSWORD_CHANGE_FAILED");
+        ex.Which.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task ChangePassword_success_returns_message()
+    {
+        var result = await _sut.ChangePasswordAsync("1006", "123", "1234", CancellationToken.None);
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+        json.Should().Contain("Password changed successfully");
+        json.Should().Contain("\"isSuccess\":true");
     }
 
     [Fact]

@@ -2,6 +2,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using LogicRetail.Application.Common;
 using LogicRetail.Application.Contracts;
 using LogicRetail.Application.Options;
@@ -13,6 +15,13 @@ namespace LogicRetail.Infrastructure.Services;
 
 public sealed class AuthService
 {
+    internal static readonly JsonSerializerOptions ProfileJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private readonly IDynamicsClient _dynamics;
     private readonly IJsonStore _store;
     private readonly CompanyAdminService _companies;
@@ -39,21 +48,14 @@ public sealed class AuthService
             throw new AppException("company, personnelNumber and password are required", 400, "VALIDATION_ERROR");
         }
 
-        // Admin registry key (e.g. logic-trial) unlocks Azure/D365 credentials.
-        // It may not equal D365 GroupCompany / DataArea (e.g. mm, rest).
-        var registryCode = company.Trim();
-        _companies.RequireActiveCompany(registryCode);
+        // Admin registry key (e.g. logic-trial) unlocks the environment.
+        // Operating DataArea comes from AuthenticateUser (InventLocationDataAreaId / Company).
+        _companies.RequireActiveCompany(company.Trim());
 
-        IReadOnlyList<RetailUserRow> rows;
+        MobileAuthPayload payload;
         try
         {
-            // Authenticate against D365 by personnel + password only, then map legal entities.
-            rows = await _dynamics.GetUsersAsync(
-                personnelNumber.Trim(),
-                password,
-                company: null,
-                activatedOnly: true,
-                ct);
+            payload = await _dynamics.AuthenticateUserAsync(personnelNumber.Trim(), password, ct);
         }
         catch (AppException)
         {
@@ -64,75 +66,22 @@ public sealed class AuthService
             throw new AppException(ex.Message, 502, "DYNAMICS_ERROR");
         }
 
-        if (rows.Count == 0)
-        {
-            throw new AppException(
-                "Invalid personnel number or password for this company",
-                401,
-                "AUTH_FAILED");
-        }
-
-        var legalEntities = rows
-            .GroupBy(r => r.GroupCompany, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .ToList();
-
-        var primary = legalEntities.FirstOrDefault(r =>
-                string.Equals(r.GroupCompany, registryCode, StringComparison.OrdinalIgnoreCase))
-            ?? legalEntities[0];
-
-        var companies = new List<CompanyInfo>
-        {
-            new()
-            {
-                Code = primary.GroupCompany,
-                Name = primary.GroupCompanyName ?? primary.GroupCompany,
-                GroupId = primary.GroupId,
-            },
-        };
-        foreach (var row in legalEntities)
-        {
-            if (string.Equals(row.GroupCompany, primary.GroupCompany, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            companies.Add(new CompanyInfo
-            {
-                Code = row.GroupCompany,
-                Name = row.GroupCompanyName ?? row.GroupCompany,
-                GroupId = row.GroupId,
-            });
-        }
-
-        var user = new UserSession
-        {
-            PersonnelNumber = primary.PersonnelNumber,
-            WorkerRecId = primary.HcmWorkerRecId,
-            Name = primary.Name ?? primary.PersonnelNumber,
-            Companies = companies,
-        };
-
+        var user = SessionFromPayload(payload);
         var accessToken = SignAccessToken(user);
-        var refreshToken = SignRefreshToken(user.PersonnelNumber, user.Companies[0].Code);
+        var refreshToken = SignRefreshToken(user);
         StoreRefresh(user.PersonnelNumber, refreshToken);
 
         return new
         {
             accessToken,
             refreshToken,
-            user = new
-            {
-                personnelNumber = user.PersonnelNumber,
-                workerRecId = user.WorkerRecId,
-                name = user.Name,
-                companies = user.Companies.Select(c => new { code = c.Code, name = c.Name, groupId = c.GroupId }),
-            },
+            user = Describe(user),
         };
     }
 
     public async Task<object> RefreshAsync(string refreshToken, CancellationToken ct)
     {
+        _ = ct;
         ClaimsPrincipal principal;
         try
         {
@@ -150,44 +99,18 @@ public sealed class AuthService
             throw new AppException("Refresh token expired or revoked", 401, "UNAUTHORIZED");
         }
 
-        var personnelNumber = principal.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+        var user = ReadSession(principal)
             ?? throw new AppException("Invalid refresh token", 401, "UNAUTHORIZED");
 
-        var company = principal.FindFirst("company")?.Value;
-        var rows = await _dynamics.GetUsersAsync(personnelNumber, null, company, true, ct);
-        if (rows.Count == 0)
+        if (!user.IsActive || !user.UserInfoEnable)
         {
             throw new AppException("User no longer active", 401, "UNAUTHORIZED");
         }
 
-        var first = rows[0];
-        var user = new UserSession
-        {
-            PersonnelNumber = first.PersonnelNumber,
-            WorkerRecId = first.HcmWorkerRecId,
-            Name = first.Name ?? first.PersonnelNumber,
-            Companies =
-            [
-                new CompanyInfo
-                {
-                    Code = first.GroupCompany,
-                    Name = first.GroupCompanyName ?? first.GroupCompany,
-                    GroupId = first.GroupId,
-                },
-            ],
-        };
-
         return new
         {
             accessToken = SignAccessToken(user),
-            user = new
-            {
-                personnelNumber = user.PersonnelNumber,
-                workerRecId = user.WorkerRecId,
-                name = user.Name,
-                companies = user.Companies.Select(c => new { code = c.Code, name = c.Name, groupId = c.GroupId }),
-            },
+            user = Describe(user),
         };
     }
 
@@ -201,6 +124,182 @@ public sealed class AuthService
         return new { ok = true };
     }
 
+    public async Task<object> ChangePasswordAsync(
+        string personnelNumber,
+        string oldPassword,
+        string newPassword,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(oldPassword) || string.IsNullOrWhiteSpace(newPassword))
+        {
+            throw new AppException("oldPassword and newPassword are required", 400, "VALIDATION_ERROR");
+        }
+
+        PasswordChangeResult result;
+        try
+        {
+            result = await _dynamics.ChangePasswordAsync(personnelNumber, oldPassword, newPassword, ct);
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new AppException(ex.Message, 502, "DYNAMICS_ERROR");
+        }
+
+        if (!result.IsSuccess)
+        {
+            throw new AppException(
+                string.IsNullOrWhiteSpace(result.Message)
+                    ? "Password change failed"
+                    : result.Message,
+                400,
+                "PASSWORD_CHANGE_FAILED");
+        }
+
+        return new
+        {
+            isSuccess = result.IsSuccess,
+            message = result.Message,
+            activationRecId = result.ActivationRecId,
+        };
+    }
+
+    public object Describe(UserSession user) => MapUser(user);
+
+    internal static UserSession SessionFromPayload(MobileAuthPayload payload)
+    {
+        if (!payload.IsSuccess)
+        {
+            throw new AppException(
+                string.IsNullOrWhiteSpace(payload.Message)
+                    ? "Invalid personnel number or password"
+                    : payload.Message,
+                401,
+                "AUTH_FAILED");
+        }
+
+        if (!payload.IsActive || !payload.UserInfoEnable)
+        {
+            throw new AppException(
+                "Account is inactive or disabled in D365.",
+                403,
+                "ACCOUNT_DISABLED");
+        }
+
+        var activeCompany = payload.ActiveCompany;
+        if (string.IsNullOrWhiteSpace(activeCompany))
+        {
+            throw new AppException("No company assigned to this account in D365.", 403, "NO_COMPANY");
+        }
+
+        return new UserSession
+        {
+            PersonnelNumber = payload.PersonnelNumber,
+            WorkerRecId = payload.HcmWorkerRecId,
+            Name = payload.WorkerName ?? payload.PersonnelNumber,
+            UserId = payload.UserId,
+            ActivationRecId = payload.ActivationRecId,
+            IsActive = payload.IsActive,
+            UserInfoEnable = payload.UserInfoEnable,
+            RetailChannelTableRecId = payload.RetailChannelTableRecId,
+            RetailChannelId = payload.RetailChannelId,
+            ChannelType = payload.ChannelType,
+            InventLocation = payload.InventLocation,
+            InventLocationDataAreaId = payload.InventLocationDataAreaId,
+            Currency = payload.Currency,
+            DefaultCustAccount = payload.DefaultCustAccount,
+            DefaultCustDataAreaId = payload.DefaultCustDataAreaId,
+            ActiveCompany = activeCompany,
+            ActiveWarehouse = payload.ActiveWarehouse,
+            NeedsWarehouseSelection = payload.NeedsWarehouseSelection,
+            Companies =
+            [
+                new CompanyInfo
+                {
+                    Code = activeCompany,
+                    Name = payload.Company ?? activeCompany,
+                },
+            ],
+        };
+    }
+
+    internal static object MapUser(UserSession user) => new
+    {
+        personnelNumber = user.PersonnelNumber,
+        workerRecId = user.WorkerRecId,
+        name = user.Name,
+        userId = user.UserId,
+        activationRecId = user.ActivationRecId,
+        isActive = user.IsActive,
+        userInfoEnable = user.UserInfoEnable,
+        company = user.ActiveCompany,
+        companies = user.Companies.Select(c => new { code = c.Code, name = c.Name, groupId = c.GroupId }),
+        retailChannelTableRecId = user.RetailChannelTableRecId,
+        retailChannelId = user.RetailChannelId,
+        channelType = user.ChannelType,
+        inventLocation = user.InventLocation,
+        inventLocationDataAreaId = user.InventLocationDataAreaId,
+        currency = user.Currency,
+        defaultCustAccount = user.DefaultCustAccount,
+        defaultCustDataAreaId = user.DefaultCustDataAreaId,
+        activeCompany = user.ActiveCompany,
+        activeWarehouse = user.ActiveWarehouse,
+        needsWarehouseSelection = user.NeedsWarehouseSelection,
+    };
+
+    public static UserSession? ReadSession(ClaimsPrincipal principal)
+    {
+        var profileJson = principal.FindFirstValue("profile");
+        if (!string.IsNullOrWhiteSpace(profileJson))
+        {
+            try
+            {
+                var fromProfile = JsonSerializer.Deserialize<UserSession>(profileJson, ProfileJson);
+                if (fromProfile is not null && !string.IsNullOrWhiteSpace(fromProfile.PersonnelNumber))
+                {
+                    return fromProfile;
+                }
+            }
+            catch (JsonException)
+            {
+                // fall through to legacy claims
+            }
+        }
+
+        var personnel = principal.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (string.IsNullOrWhiteSpace(personnel))
+        {
+            return null;
+        }
+
+        var worker = long.TryParse(principal.FindFirstValue("workerRecId"), out var w) ? w : 0;
+        var name = principal.FindFirstValue("name") ?? personnel;
+        var company = principal.FindFirstValue("company") ?? string.Empty;
+        var companiesJson = principal.FindFirstValue("companies") ?? "[]";
+        var companies = JsonSerializer.Deserialize<List<CompanyInfo>>(
+            companiesJson,
+            ProfileJson) ?? [];
+        if (companies.Count == 0 && !string.IsNullOrWhiteSpace(company))
+        {
+            companies.Add(new CompanyInfo { Code = company, Name = company });
+        }
+
+        return new UserSession
+        {
+            PersonnelNumber = personnel,
+            WorkerRecId = worker,
+            Name = name,
+            Companies = companies,
+            ActiveCompany = company,
+            IsActive = true,
+            UserInfoEnable = true,
+        };
+    }
+
     private void StoreRefresh(string personnelNumber, string refreshToken)
     {
         _store.InsertRefreshToken(
@@ -212,27 +311,28 @@ public sealed class AuthService
 
     private string SignAccessToken(UserSession user)
     {
-        var claims = new List<Claim>
-        {
+        return CreateToken(BuildSessionClaims(user), ParseDuration(_jwt.ExpiresIn, TimeSpan.FromHours(8)));
+    }
+
+    private string SignRefreshToken(UserSession user)
+    {
+        var claims = BuildSessionClaims(user);
+        claims.Add(new Claim("typ", "refresh"));
+        return CreateToken(claims, ParseDuration(_jwt.RefreshExpiresIn, TimeSpan.FromDays(7)));
+    }
+
+    private static List<Claim> BuildSessionClaims(UserSession user)
+    {
+        return
+        [
             new(JwtRegisteredClaimNames.Sub, user.PersonnelNumber),
             new("workerRecId", user.WorkerRecId.ToString()),
             new("name", user.Name),
-            new("company", user.Companies[0].Code),
-            new("companies", System.Text.Json.JsonSerializer.Serialize(
+            new("company", user.ActiveCompany),
+            new("companies", JsonSerializer.Serialize(
                 user.Companies.Select(c => new { code = c.Code, name = c.Name, groupId = c.GroupId }))),
-        };
-        return CreateToken(claims, ParseDuration(_jwt.ExpiresIn, TimeSpan.FromHours(8)));
-    }
-
-    private string SignRefreshToken(string personnelNumber, string company)
-    {
-        var claims = new List<Claim>
-        {
-            new(JwtRegisteredClaimNames.Sub, personnelNumber),
-            new("typ", "refresh"),
-            new("company", company),
-        };
-        return CreateToken(claims, ParseDuration(_jwt.RefreshExpiresIn, TimeSpan.FromDays(7)));
+            new("profile", JsonSerializer.Serialize(user, ProfileJson)),
+        ];
     }
 
     private string CreateToken(IEnumerable<Claim> claims, TimeSpan lifetime)

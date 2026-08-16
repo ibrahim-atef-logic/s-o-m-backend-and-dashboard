@@ -99,6 +99,20 @@ public sealed class MockDynamicsClient : IDynamicsClient
             InventSiteId = "1",
             CreatedDateTime = DateTime.UtcNow.ToString("O"),
         },
+        new()
+        {
+            SalesId = "SO-MM-1006",
+            CustAccount = "10-10002",
+            SalesName = "محمد عفيف",
+            WorkerSalesTaker = 5637144578,
+            SalesStatus = "Backorder",
+            DocumentStatus = "None",
+            DataArea = "mm",
+            PriceGroupId = "Retail",
+            InventLocationId = "MMS000WH",
+            InventSiteId = "1",
+            CreatedDateTime = DateTime.UtcNow.ToString("O"),
+        },
     ];
 
     private readonly List<SalesOrderLine> _lines =
@@ -124,6 +138,17 @@ public sealed class MockDynamicsClient : IDynamicsClient
             SalesUnit = "ea",
             LineNum = 1,
             DataArea = "logic-trial",
+        },
+        new()
+        {
+            RecordId = 3,
+            SalesId = "SO-MM-1006",
+            ItemId = "ITEM-100",
+            ProductName = "Demo Item",
+            SalesQty = 1,
+            SalesUnit = "ea",
+            LineNum = 1,
+            DataArea = "mm",
         },
     ];
 
@@ -157,6 +182,177 @@ public sealed class MockDynamicsClient : IDynamicsClient
 
         return Task.FromResult<IReadOnlyList<RetailUserRow>>(q.ToList());
     }
+
+    public Task<MobileAuthPayload> AuthenticateUserAsync(
+        string personnelNumber,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        var key = personnelNumber.Trim();
+        if (!MockPasswords.TryGetValue(key, out var expected) || expected != password)
+        {
+            return Task.FromResult(new MobileAuthPayload
+            {
+                IsSuccess = false,
+                Message = $"Authentication failed for worker {key}.",
+                PersonnelNumber = key,
+            });
+        }
+
+        if (MockAuth.TryGetValue(key, out var payload))
+        {
+            return Task.FromResult(payload);
+        }
+
+        return Task.FromResult(new MobileAuthPayload
+        {
+            IsSuccess = false,
+            Message = $"Authentication failed for worker {key}.",
+            PersonnelNumber = key,
+        });
+    }
+
+    public Task<PasswordChangeResult> ChangePasswordAsync(
+        string personnelNumber,
+        string oldPassword,
+        string newPassword,
+        CancellationToken cancellationToken = default)
+    {
+        var key = personnelNumber.Trim();
+        if (!MockPasswords.TryGetValue(key, out var expected) || expected != oldPassword)
+        {
+            return Task.FromResult(new PasswordChangeResult
+            {
+                IsSuccess = false,
+                Message = $"The current password is incorrect for worker {key}.",
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(newPassword))
+        {
+            return Task.FromResult(new PasswordChangeResult
+            {
+                IsSuccess = false,
+                Message = "New password is required.",
+            });
+        }
+
+        var recId = MockAuth.TryGetValue(key, out var payload) ? payload.ActivationRecId : 0;
+        return Task.FromResult(new PasswordChangeResult
+        {
+            IsSuccess = true,
+            Message = $"Password changed successfully for worker {key}.",
+            ActivationRecId = recId,
+        });
+    }
+
+    private static readonly Dictionary<string, string> MockPasswords = new(StringComparer.Ordinal)
+    {
+        ["EMP001"] = "1234",
+        ["EMP002"] = "pass",
+        ["1006"] = "123",
+        ["12344"] = "123",
+        ["DISABLED"] = "123",
+    };
+
+    private static readonly Dictionary<string, MobileAuthPayload> MockAuth = new(StringComparer.Ordinal)
+    {
+        ["EMP001"] = new()
+        {
+            IsSuccess = true,
+            Message = "Authentication successful for worker EMP001.",
+            ActivationRecId = 5637140001,
+            HcmWorkerRecId = 5637144576,
+            PersonnelNumber = "EMP001",
+            UserId = "ahmed.sales",
+            WorkerName = "Ahmed Sales",
+            Company = "usmf",
+            IsActive = true,
+            UserInfoEnable = true,
+            RetailChannelTableRecId = 100,
+            RetailChannelId = "S0001",
+            ChannelType = 0,
+            InventLocation = "11",
+            InventLocationDataAreaId = "usmf",
+            Currency = "USD",
+            DefaultCustAccount = "US-001",
+            DefaultCustDataAreaId = "usmf",
+        },
+        ["EMP002"] = new()
+        {
+            IsSuccess = true,
+            Message = "Authentication successful for worker EMP002.",
+            ActivationRecId = 5637140002,
+            HcmWorkerRecId = 5637144577,
+            PersonnelNumber = "EMP002",
+            UserId = "sara.retail",
+            WorkerName = "Sara Retail",
+            Company = "usmf",
+            IsActive = true,
+            UserInfoEnable = true,
+            InventLocation = "11",
+            InventLocationDataAreaId = "usmf",
+            Currency = "USD",
+            DefaultCustAccount = "US-001",
+            DefaultCustDataAreaId = "usmf",
+        },
+        ["1006"] = new()
+        {
+            IsSuccess = true,
+            Message = "Authentication successful for worker 1006.",
+            ActivationRecId = 5637144576,
+            HcmWorkerRecId = 5637144578,
+            PersonnelNumber = "1006",
+            UserId = "m.afif",
+            WorkerName = "محمد عفيف",
+            Company = "MM",
+            IsActive = true,
+            UserInfoEnable = true,
+            RetailChannelTableRecId = 5637152827,
+            RetailChannelId = "912",
+            ChannelType = 4,
+            InventLocation = "MMS000WH",
+            InventLocationDataAreaId = "mm",
+            Currency = "SAR",
+            DefaultCustAccount = "10-10002",
+            DefaultCustDataAreaId = "mm",
+        },
+        ["12344"] = new()
+        {
+            IsSuccess = true,
+            Message = "Authentication successful for worker 12344.",
+            ActivationRecId = 5637145326,
+            HcmWorkerRecId = 5637224076,
+            PersonnelNumber = "12344",
+            UserId = "m.wahas",
+            WorkerName = "مروان وهاس",
+            Company = "PLTR",
+            IsActive = true,
+            UserInfoEnable = true,
+            RetailChannelTableRecId = 0,
+            RetailChannelId = null,
+            ChannelType = 0,
+            InventLocation = null,
+            InventLocationDataAreaId = null,
+            Currency = null,
+            DefaultCustAccount = null,
+            DefaultCustDataAreaId = null,
+        },
+        ["DISABLED"] = new()
+        {
+            IsSuccess = true,
+            Message = "Authentication successful for worker DISABLED.",
+            ActivationRecId = 1,
+            HcmWorkerRecId = 1,
+            PersonnelNumber = "DISABLED",
+            UserId = "disabled.user",
+            WorkerName = "Disabled User",
+            Company = "usmf",
+            IsActive = false,
+            UserInfoEnable = true,
+            InventLocationDataAreaId = "usmf",
+        },
+    };
 
     public Task<IReadOnlyList<SalesOrderHeader>> GetSalesOrderHeadersAsync(
         long? workerRecId,
@@ -226,12 +422,13 @@ public sealed class MockDynamicsClient : IDynamicsClient
         string dataArea,
         string? custAccount,
         string? priceGroupId,
+        string? unitId = null,
         CancellationToken cancellationToken = default) =>
         Task.FromResult<PriceInfo?>(new PriceInfo
         {
             ItemNumber = itemNumber,
             Price = 25.5m,
-            UnitId = "ea",
+            UnitId = unitId ?? "ea",
             CustomerAccountNumber = custAccount,
             PriceCustomerGroupCode = priceGroupId,
             DataArea = dataArea,
@@ -241,6 +438,7 @@ public sealed class MockDynamicsClient : IDynamicsClient
         string itemNumber,
         string dataArea,
         string? priceGroup,
+        string? unitId = null,
         CancellationToken cancellationToken = default)
     {
         IReadOnlyList<PriceInfo> list =
@@ -249,7 +447,7 @@ public sealed class MockDynamicsClient : IDynamicsClient
             {
                 ItemNumber = itemNumber,
                 Price = 25.5m,
-                UnitId = "ea",
+                UnitId = unitId ?? "ea",
                 PriceCustomerGroupCode = priceGroup,
                 DataArea = dataArea,
             },
@@ -270,6 +468,32 @@ public sealed class MockDynamicsClient : IDynamicsClient
             Unit = "ea",
             ProductName = "Scan Item",
         });
+
+    public Task<IReadOnlyList<MobileWarehouse>> GetStandardWarehousesAsync(
+        string dataAreaId,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<MobileWarehouse> warehouses =
+        [
+            new()
+            {
+                DataAreaId = dataAreaId,
+                InventLocationId = "11",
+                Name = "Main Warehouse",
+                InventSiteId = "1",
+                InventLocationType = "Standard",
+            },
+            new()
+            {
+                DataAreaId = dataAreaId,
+                InventLocationId = "12",
+                Name = "Secondary Warehouse",
+                InventSiteId = "1",
+                InventLocationType = "Standard",
+            },
+        ];
+        return Task.FromResult(warehouses);
+    }
 
     public Task CreateSalesOrderLineAsync(
         string dataAreaId,

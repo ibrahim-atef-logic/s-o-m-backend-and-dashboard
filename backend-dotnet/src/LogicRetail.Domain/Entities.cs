@@ -13,6 +13,70 @@ public sealed class UserSession
     public required long WorkerRecId { get; init; }
     public required string Name { get; init; }
     public required IReadOnlyList<CompanyInfo> Companies { get; init; }
+
+    public string? UserId { get; init; }
+    public long ActivationRecId { get; init; }
+    public bool IsActive { get; init; } = true;
+    public bool UserInfoEnable { get; init; } = true;
+    public long RetailChannelTableRecId { get; init; }
+    public string? RetailChannelId { get; init; }
+    public int ChannelType { get; init; }
+    public string? InventLocation { get; init; }
+    public string? InventLocationDataAreaId { get; init; }
+    public string? Currency { get; init; }
+    public string? DefaultCustAccount { get; init; }
+    public string? DefaultCustDataAreaId { get; init; }
+    public string ActiveCompany { get; init; } = string.Empty;
+    public string? ActiveWarehouse { get; init; }
+    public bool NeedsWarehouseSelection { get; init; }
+}
+
+/// <summary>Payload from D365 AuthenticateUser (after inner JSON deserialize).</summary>
+public sealed class MobileAuthPayload
+{
+    public bool IsSuccess { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public long ActivationRecId { get; init; }
+    public long HcmWorkerRecId { get; init; }
+    public string PersonnelNumber { get; init; } = string.Empty;
+    public string? UserId { get; init; }
+    public string? WorkerName { get; init; }
+    public string? Company { get; init; }
+    public bool IsActive { get; init; }
+    public bool UserInfoEnable { get; init; }
+    public long RetailChannelTableRecId { get; init; }
+    public string? RetailChannelId { get; init; }
+    public int ChannelType { get; init; }
+    public string? InventLocation { get; init; }
+    public string? InventLocationDataAreaId { get; init; }
+    public string? Currency { get; init; }
+    public string? DefaultCustAccount { get; init; }
+    public string? DefaultCustDataAreaId { get; init; }
+
+    public string ActiveCompany
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(InventLocationDataAreaId))
+            {
+                return InventLocationDataAreaId.Trim();
+            }
+
+            return (Company ?? string.Empty).Trim();
+        }
+    }
+
+    public string? ActiveWarehouse =>
+        string.IsNullOrWhiteSpace(InventLocation) ? null : InventLocation.Trim();
+
+    public bool NeedsWarehouseSelection => string.IsNullOrWhiteSpace(ActiveWarehouse);
+}
+
+public sealed class PasswordChangeResult
+{
+    public bool IsSuccess { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public long ActivationRecId { get; init; }
 }
 
 public sealed class SalesOrderHeader
@@ -70,4 +134,13 @@ public sealed class WarehouseOnHand
     public decimal AvailableOnHandQuantity { get; init; }
     public string? Unit { get; init; }
     public string? ProductName { get; init; }
+}
+
+public sealed class MobileWarehouse
+{
+    public required string DataAreaId { get; init; }
+    public required string InventLocationId { get; init; }
+    public required string Name { get; init; }
+    public string? InventSiteId { get; init; }
+    public required string InventLocationType { get; init; }
 }

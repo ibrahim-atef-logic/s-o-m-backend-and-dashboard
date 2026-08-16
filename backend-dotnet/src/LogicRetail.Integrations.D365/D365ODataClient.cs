@@ -169,6 +169,56 @@ public sealed class D365ODataClient
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// POST an OData bound/unbound action. D365 F&amp;O often returns
+    /// <c>{ "value": "&lt;json-encoded string&gt;" }</c> which is deserialized twice.
+    /// </summary>
+    public async Task<JsonElement> PostActionAsync(
+        string entitySet,
+        string actionName,
+        object payload,
+        CancellationToken cancellationToken = default)
+    {
+        return await SendWithRetryAsync(async token =>
+        {
+            var url = $"{_baseUrl}/{entitySet}/Microsoft.Dynamics.DataEntities.{actionName}";
+            var json = JsonSerializer.Serialize(payload);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.TryAddWithoutValidation("Accept", "application/json");
+            using var res = await _http.SendAsync(req, cancellationToken);
+            var body = await res.Content.ReadAsStringAsync(cancellationToken);
+            if (!res.IsSuccessStatusCode)
+            {
+                throw MapError(res.StatusCode, body);
+            }
+
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("value", out var value))
+            {
+                return root.Clone();
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var inner = value.GetString();
+                if (string.IsNullOrWhiteSpace(inner))
+                {
+                    return JsonDocument.Parse("{}").RootElement.Clone();
+                }
+
+                using var innerDoc = JsonDocument.Parse(inner);
+                return innerDoc.RootElement.Clone();
+            }
+
+            return value.Clone();
+        }, cancellationToken);
+    }
+
     private async Task<T> SendWithRetryAsync<T>(Func<string, Task<T>> action, CancellationToken cancellationToken)
     {
         var token = await _auth.GetAccessTokenAsync(cancellationToken);

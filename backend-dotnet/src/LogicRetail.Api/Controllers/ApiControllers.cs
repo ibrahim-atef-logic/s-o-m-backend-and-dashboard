@@ -20,6 +20,7 @@ public sealed class AuthController : ControllerBase
     public sealed record LoginBody(string Company, string PersonnelNumber, string Password);
     public sealed record RefreshBody(string RefreshToken);
     public sealed record LogoutBody(string? RefreshToken);
+    public sealed record ChangePasswordBody(string OldPassword, string NewPassword);
 
     [HttpPost("login")]
     [AllowAnonymous]
@@ -42,18 +43,25 @@ public sealed class AuthController : ControllerBase
     public IActionResult Logout([FromBody] LogoutBody body) =>
         Ok(ApiEnvelope.Ok(_auth.Logout(body.RefreshToken)));
 
+    [HttpPost("change-password")]
+    [Authorize]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordBody body, CancellationToken ct)
+    {
+        var user = User.GetUser();
+        var data = await _auth.ChangePasswordAsync(
+            user.PersonnelNumber,
+            body.OldPassword,
+            body.NewPassword,
+            ct);
+        return Ok(ApiEnvelope.Ok(data));
+    }
+
     [HttpGet("me")]
     [Authorize]
     public IActionResult Me()
     {
         var user = User.GetUser();
-        return Ok(ApiEnvelope.Ok(new
-        {
-            personnelNumber = user.PersonnelNumber,
-            workerRecId = user.WorkerRecId,
-            name = user.Name,
-            companies = user.Companies.Select(c => new { code = c.Code, name = c.Name, groupId = c.GroupId }),
-        }));
+        return Ok(ApiEnvelope.Ok(_auth.Describe(user)));
     }
 }
 
@@ -143,10 +151,11 @@ public sealed class CatalogController : ControllerBase
         [FromQuery] string company,
         [FromQuery] string? custAccount,
         [FromQuery] string? priceGroup,
+        [FromQuery] string? unitId,
         CancellationToken ct)
     {
         User.GetUser().AssertCompanyAccess(company);
-        var price = await _dynamics.ResolvePriceAsync(item, company, custAccount, priceGroup, ct);
+        var price = await _dynamics.ResolvePriceAsync(item, company, custAccount, priceGroup, unitId, ct);
         if (price is null)
         {
             throw new AppException("No price found", 404, "NO_PRICE");
@@ -186,6 +195,22 @@ public sealed class CatalogController : ControllerBase
             unit = onHand.Unit,
             productName = onHand.ProductName,
         }));
+    }
+
+    [HttpGet("warehouses")]
+    public async Task<IActionResult> Warehouses([FromQuery] string company, CancellationToken ct)
+    {
+        User.GetUser().AssertCompanyAccess(company);
+        var rows = await _dynamics.GetStandardWarehousesAsync(company, ct);
+        var data = rows.Select(w => new
+        {
+            dataAreaId = w.DataAreaId,
+            inventLocationId = w.InventLocationId,
+            name = w.Name,
+            inventSiteId = w.InventSiteId,
+            inventLocationType = w.InventLocationType,
+        });
+        return Ok(ApiEnvelope.Ok(data));
     }
 
     private static object MapHeader(Domain.SalesOrderHeader h) => new

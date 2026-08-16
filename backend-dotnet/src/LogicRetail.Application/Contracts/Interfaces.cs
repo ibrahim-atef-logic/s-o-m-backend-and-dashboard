@@ -34,12 +34,14 @@ public interface IDynamicsClient
         string dataArea,
         string? custAccount,
         string? priceGroupId,
+        string? unitId = null,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<PriceInfo>> GetPriceAgreementsAsync(
         string itemNumber,
         string dataArea,
         string? priceGroup,
+        string? unitId = null,
         CancellationToken cancellationToken = default);
 
     Task<WarehouseOnHand?> GetWarehouseOnHandAsync(
@@ -47,11 +49,26 @@ public interface IDynamicsClient
         string warehouseId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<MobileWarehouse>> GetStandardWarehousesAsync(
+        string dataAreaId,
+        CancellationToken cancellationToken = default);
+
     Task CreateSalesOrderLineAsync(
         string dataAreaId,
         string salesOrderNumber,
         string itemNumber,
         int orderedSalesQuantity,
+        CancellationToken cancellationToken = default);
+
+    Task<MobileAuthPayload> AuthenticateUserAsync(
+        string personnelNumber,
+        string password,
+        CancellationToken cancellationToken = default);
+
+    Task<PasswordChangeResult> ChangePasswordAsync(
+        string personnelNumber,
+        string oldPassword,
+        string newPassword,
         CancellationToken cancellationToken = default);
 }
 

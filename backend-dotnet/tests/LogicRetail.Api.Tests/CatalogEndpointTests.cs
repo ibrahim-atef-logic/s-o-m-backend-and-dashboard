@@ -148,4 +148,29 @@ public sealed class CatalogEndpointTests : IClassFixture<MockApiFactory>
         doc.RootElement.GetProperty("data").GetProperty("availableSalesQuantity").GetDecimal().Should().Be(100);
         doc.RootElement.GetProperty("data").GetProperty("warehouseId").GetString().Should().Be("11");
     }
+
+    [Fact]
+    public async Task Get_warehouses_returns_only_standard_locations()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.GetAsync("/api/v1/warehouses?company=usmf");
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var rows = doc.RootElement.GetProperty("data");
+        rows.GetArrayLength().Should().BeGreaterThan(0);
+        rows.EnumerateArray().Should().OnlyContain(
+            row => row.GetProperty("inventLocationType").GetString() == "Standard");
+    }
+
+    [Fact]
+    public async Task Get_warehouses_forbidden_for_other_company()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.GetAsync("/api/v1/warehouses?company=ussi");
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "FORBIDDEN_COMPANY");
+    }
 }

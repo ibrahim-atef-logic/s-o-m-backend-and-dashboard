@@ -28,6 +28,9 @@ public sealed class AuthEndpointTests : IClassFixture<MockApiFactory>
         data.GetProperty("refreshToken").GetString().Should().NotBeNullOrWhiteSpace();
         data.GetProperty("user").GetProperty("personnelNumber").GetString().Should().Be("EMP001");
         data.GetProperty("user").GetProperty("companies")[0].GetProperty("code").GetString().Should().Be("usmf");
+        data.GetProperty("user").GetProperty("activeCompany").GetString().Should().Be("usmf");
+        data.GetProperty("user").GetProperty("activeWarehouse").GetString().Should().Be("11");
+        data.GetProperty("user").GetProperty("needsWarehouseSelection").GetBoolean().Should().BeFalse();
     }
 
     /// <summary>
@@ -50,9 +53,51 @@ public sealed class AuthEndpointTests : IClassFixture<MockApiFactory>
         var data = doc.RootElement.GetProperty("data");
         data.GetProperty("accessToken").GetString().Should().NotBeNullOrWhiteSpace();
         data.GetProperty("user").GetProperty("personnelNumber").GetString().Should().Be("1006");
-        data.GetProperty("user").GetProperty("name").GetString().Should().Be("Trial User");
+        data.GetProperty("user").GetProperty("name").GetString().Should().Be("محمد عفيف");
+        data.GetProperty("user").GetProperty("userId").GetString().Should().Be("m.afif");
+        data.GetProperty("user").GetProperty("activeCompany").GetString().Should().Be("mm");
+        data.GetProperty("user").GetProperty("activeWarehouse").GetString().Should().Be("MMS000WH");
+        data.GetProperty("user").GetProperty("retailChannelId").GetString().Should().Be("912");
+        data.GetProperty("user").GetProperty("currency").GetString().Should().Be("SAR");
+        data.GetProperty("user").GetProperty("defaultCustAccount").GetString().Should().Be("10-10002");
+        data.GetProperty("user").GetProperty("needsWarehouseSelection").GetBoolean().Should().BeFalse();
         data.GetProperty("user").GetProperty("companies")[0].GetProperty("code").GetString()
-            .Should().Be("logic-trial");
+            .Should().Be("mm");
+    }
+
+    [Fact]
+    public async Task Post_login_12344_needs_warehouse_selection()
+    {
+        var client = _factory.CreateClient();
+        var res = await ApiTestClient.PostJsonAsync(client, "/api/v1/auth/login", new
+        {
+            company = "logic-trial",
+            personnelNumber = "12344",
+            password = "123",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var user = doc.RootElement.GetProperty("data").GetProperty("user");
+        user.GetProperty("personnelNumber").GetString().Should().Be("12344");
+        user.GetProperty("activeCompany").GetString().Should().Be("PLTR");
+        user.GetProperty("needsWarehouseSelection").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Post_login_disabled_returns_account_disabled()
+    {
+        var client = _factory.CreateClient();
+        var res = await ApiTestClient.PostJsonAsync(client, "/api/v1/auth/login", new
+        {
+            company = "usmf",
+            personnelNumber = "DISABLED",
+            password = "123",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "ACCOUNT_DISABLED");
     }
 
     [Fact]
@@ -174,7 +219,41 @@ public sealed class AuthEndpointTests : IClassFixture<MockApiFactory>
         res.StatusCode.Should().Be(HttpStatusCode.OK);
         await ApiTestClient.AssertEnvelopeSuccessAsync(res);
         using var doc = await ApiTestClient.ReadJsonAsync(res);
-        doc.RootElement.GetProperty("data").GetProperty("personnelNumber").GetString().Should().Be("EMP001");
+        var me = doc.RootElement.GetProperty("data");
+        me.GetProperty("personnelNumber").GetString().Should().Be("EMP001");
+        me.GetProperty("activeCompany").GetString().Should().Be("usmf");
+        me.GetProperty("activeWarehouse").GetString().Should().Be("11");
+        me.GetProperty("defaultCustAccount").GetString().Should().Be("US-001");
+    }
+
+    [Fact]
+    public async Task Post_change_password_wrong_old_returns_failed()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await ApiTestClient.PostJsonAsync(client, "/api/v1/auth/change-password", new
+        {
+            oldPassword = "wrong",
+            newPassword = "9999",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "PASSWORD_CHANGE_FAILED");
+    }
+
+    [Fact]
+    public async Task Post_change_password_success()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await ApiTestClient.PostJsonAsync(client, "/api/v1/auth/change-password", new
+        {
+            oldPassword = "1234",
+            newPassword = "9999",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        doc.RootElement.GetProperty("data").GetProperty("isSuccess").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using FluentAssertions;
 
 namespace LogicRetail.Api.Tests;
@@ -169,6 +170,94 @@ public sealed class CatalogEndpointTests : IClassFixture<MockApiFactory>
     {
         var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
         var res = await client.GetAsync("/api/v1/warehouses?company=ussi");
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "FORBIDDEN_COMPANY");
+    }
+
+    [Fact]
+    public async Task Get_customers_returns_accounts_for_company()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.GetAsync("/api/v1/customers?company=usmf");
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var rows = doc.RootElement.GetProperty("data");
+        rows.GetArrayLength().Should().BeGreaterThan(0);
+        rows.EnumerateArray().Should().OnlyContain(
+            row => row.GetProperty("dataAreaId").GetString() == "usmf");
+    }
+
+    [Fact]
+    public async Task Get_customers_filters_by_search_term()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.GetAsync("/api/v1/customers?company=usmf&search=MMS021");
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var rows = doc.RootElement.GetProperty("data");
+        rows.GetArrayLength().Should().Be(1);
+        rows[0].GetProperty("customerAccount").GetString().Should().Be("MMS021");
+    }
+
+    [Fact]
+    public async Task Get_customers_forbidden_for_other_company()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.GetAsync("/api/v1/customers?company=ussi");
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "FORBIDDEN_COMPANY");
+    }
+
+    [Fact]
+    public async Task Post_sales_order_creates_header()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.PostAsJsonAsync("/api/v1/sales-orders", new
+        {
+            company = "usmf",
+            custAccount = "MMS021",
+            inventLocationId = "11",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var data = doc.RootElement.GetProperty("data");
+        data.GetProperty("salesOrderNumber").GetString().Should().NotBeNullOrWhiteSpace();
+        data.GetProperty("custAccount").GetString().Should().Be("MMS021");
+        data.GetProperty("inventLocationId").GetString().Should().Be("11");
+        data.GetProperty("dataAreaId").GetString().Should().Be("usmf");
+    }
+
+    [Fact]
+    public async Task Post_sales_order_requires_customer_account()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.PostAsJsonAsync("/api/v1/sales-orders", new
+        {
+            company = "usmf",
+            inventLocationId = "11",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "VALIDATION_ERROR");
+    }
+
+    [Fact]
+    public async Task Post_sales_order_forbidden_for_other_company()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await client.PostAsJsonAsync("/api/v1/sales-orders", new
+        {
+            company = "ussi",
+            custAccount = "MMS021",
+            inventLocationId = "11",
+        });
 
         res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         await ApiTestClient.AssertEnvelopeErrorAsync(res, "FORBIDDEN_COMPANY");

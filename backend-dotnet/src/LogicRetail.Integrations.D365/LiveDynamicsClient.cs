@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using LogicRetail.Application.Common;
 using LogicRetail.Application.Contracts;
@@ -435,6 +436,139 @@ public sealed class LiveDynamicsClient : IDynamicsClient
             throw MapDynamicsError(ex);
         }
     }
+
+    public async Task<IReadOnlyList<MobileCustomer>> GetCustomersAsync(
+        string dataAreaId,
+        string? search,
+        int top,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var filter = new StringBuilder($"dataAreaId eq '{ODataEscaper.String(dataAreaId)}'");
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var term = ODataEscaper.String(search.Trim());
+                filter.Append(
+                    $" and (contains(CustomerAccount,'{term}') or contains(OrganizationName,'{term}'))");
+            }
+
+            var rows = await _odata.QueryAsync(
+                "CustomersV3",
+                filter.ToString(),
+                cancellationToken,
+                crossCompany: true,
+                select: "dataAreaId,CustomerAccount,OrganizationName,CustomerGroupId,SalesCurrencyCode,PrimaryContactPhone,AddressCity",
+                top: top,
+                orderBy: "CustomerAccount");
+            return rows.Select(MapMobileCustomer).ToList();
+        }
+        catch (D365ODataException ex)
+        {
+            throw MapDynamicsError(ex);
+        }
+    }
+
+    public async Task<CreatedSalesOrder> CreateSalesOrderHeaderAsync(
+        string dataAreaId,
+        string customerAccount,
+        string? warehouseId,
+        string? siteId,
+        string? orderTakerPersonnelNumber,
+        string? currencyCode,
+        CancellationToken cancellationToken = default)
+    {
+        // SalesOrderHeadersV4 has no WorkerSalesTaker/CustAccount/InventLocationId columns;
+        // the sales taker is written as a personnel number, not an HcmWorker RecId.
+        var payload = new Dictionary<string, object?>
+        {
+            ["dataAreaId"] = dataAreaId,
+            ["OrderingCustomerAccountNumber"] = customerAccount,
+            ["InvoiceCustomerAccountNumber"] = customerAccount,
+        };
+
+        if (!string.IsNullOrWhiteSpace(warehouseId))
+        {
+            payload["DefaultShippingWarehouseId"] = warehouseId.Trim();
+        }
+
+        // D365 accepts a header without a site but does not derive one, leaving the
+        // order with a blank site, so resolve it from the warehouse instead.
+        var resolvedSite = string.IsNullOrWhiteSpace(siteId)
+            ? await ResolveSiteForWarehouseAsync(dataAreaId, warehouseId, cancellationToken)
+            : siteId.Trim();
+        if (!string.IsNullOrWhiteSpace(resolvedSite))
+        {
+            payload["DefaultShippingSiteId"] = resolvedSite;
+        }
+
+        if (!string.IsNullOrWhiteSpace(orderTakerPersonnelNumber))
+        {
+            payload["OrderTakerPersonnelNumber"] = orderTakerPersonnelNumber.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(currencyCode))
+        {
+            payload["CurrencyCode"] = currencyCode.Trim();
+        }
+
+        try
+        {
+            var created = await _odata.PostReturningAsync(
+                "SalesOrderHeadersV4",
+                payload,
+                cancellationToken);
+            return new CreatedSalesOrder
+            {
+                DataAreaId = EmptyToNull(GetString(created, "dataAreaId")) ?? dataAreaId,
+                SalesOrderNumber = EmptyToNull(GetString(created, "SalesOrderNumber")) ?? string.Empty,
+                CustomerAccount =
+                    EmptyToNull(GetString(created, "OrderingCustomerAccountNumber")) ?? customerAccount,
+                WarehouseId = EmptyToNull(GetString(created, "DefaultShippingWarehouseId")) ?? warehouseId,
+                SiteId = EmptyToNull(GetString(created, "DefaultShippingSiteId")) ?? siteId,
+                CurrencyCode = EmptyToNull(GetString(created, "CurrencyCode")) ?? currencyCode,
+                OrderTakerPersonnelNumber =
+                    EmptyToNull(GetString(created, "OrderTakerPersonnelNumber")) ?? orderTakerPersonnelNumber,
+            };
+        }
+        catch (D365ODataException ex)
+        {
+            throw MapDynamicsError(ex);
+        }
+    }
+
+    private async Task<string?> ResolveSiteForWarehouseAsync(
+        string dataAreaId,
+        string? warehouseId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(warehouseId))
+        {
+            return null;
+        }
+
+        var filter =
+            $"dataAreaId eq '{ODataEscaper.String(dataAreaId)}' and "
+            + $"InventLocationId eq '{ODataEscaper.String(warehouseId.Trim())}'";
+        var rows = await _odata.QueryAsync(
+            "SiteAndWarehouseMobiles",
+            filter,
+            cancellationToken,
+            crossCompany: true,
+            top: 1);
+        return rows.Count == 0 ? null : EmptyToNull(GetString(rows[0], "InventSiteId"));
+    }
+
+    private static MobileCustomer MapMobileCustomer(JsonElement e) => new()
+    {
+        DataAreaId = (GetString(e, "dataAreaId") ?? string.Empty).Trim(),
+        CustomerAccount = (GetString(e, "CustomerAccount") ?? string.Empty).Trim(),
+        Name = (GetString(e, "OrganizationName") ?? string.Empty).Trim(),
+        CustomerGroupId = EmptyToNull(GetString(e, "CustomerGroupId")),
+        SalesCurrencyCode = EmptyToNull(GetString(e, "SalesCurrencyCode")),
+        PrimaryPhone = EmptyToNull(GetString(e, "PrimaryContactPhone")),
+        AddressCity = EmptyToNull(GetString(e, "AddressCity")),
+    };
 
     /// <summary>
     /// Trial D365 data often pads ItemNumber with a leading space. Try trimmed + padded keys.

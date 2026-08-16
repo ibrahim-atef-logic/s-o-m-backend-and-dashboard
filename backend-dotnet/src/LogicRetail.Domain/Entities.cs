@@ -144,3 +144,25 @@ public sealed class MobileWarehouse
     public string? InventSiteId { get; init; }
     public required string InventLocationType { get; init; }
 }
+
+public sealed class MobileCustomer
+{
+    public required string DataAreaId { get; init; }
+    public required string CustomerAccount { get; init; }
+    public required string Name { get; init; }
+    public string? CustomerGroupId { get; init; }
+    public string? SalesCurrencyCode { get; init; }
+    public string? PrimaryPhone { get; init; }
+    public string? AddressCity { get; init; }
+}
+
+public sealed class CreatedSalesOrder
+{
+    public required string DataAreaId { get; init; }
+    public required string SalesOrderNumber { get; init; }
+    public required string CustomerAccount { get; init; }
+    public string? WarehouseId { get; init; }
+    public string? SiteId { get; init; }
+    public string? CurrencyCode { get; init; }
+    public string? OrderTakerPersonnelNumber { get; init; }
+}

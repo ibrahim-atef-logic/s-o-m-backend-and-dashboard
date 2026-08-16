@@ -49,6 +49,36 @@ Authorization: Bearer <accessToken>
 { "oldPassword": "123", "newPassword": "1234" }
 ```
 
+## Sales order creation
+
+Three endpoints back the mobile "new order" flow. All take `?company=` / `company` = the
+D365 DataArea (`user.activeCompany`), never the login registry key.
+
+```http
+GET  /api/v1/warehouses?company=mm
+GET  /api/v1/customers?company=mm&search=MMS&top=50
+POST /api/v1/sales-orders
+{ "company": "mm", "custAccount": "MMS021", "inventLocationId": "MMS000WH" }
+```
+
+`/warehouses` reads `SiteAndWarehouseMobiles` filtered to `InventLocationType eq Standard`;
+it is only needed when `user.activeWarehouse` is empty. `/customers` reads `CustomersV3`.
+
+`POST /sales-orders` writes to `SalesOrderHeadersV4`. That entity does **not** expose
+`WorkerSalesTaker`, `CustAccount` or `InventLocationId`; the real columns are:
+
+| Value | `SalesOrderHeadersV4` column |
+| --- | --- |
+| Customer | `OrderingCustomerAccountNumber` + `InvoiceCustomerAccountNumber` |
+| Warehouse | `DefaultShippingWarehouseId` |
+| Site | `DefaultShippingSiteId` (resolved from the warehouse when omitted) |
+| Sales taker | `OrderTakerPersonnelNumber` — the **personnel number** string, not an HcmWorker RecId |
+
+D365 resolves `OrderTakerPersonnelNumber` into `SalesTable.WorkerSalesTaker`, so a created
+order shows up in `GET /api/v1/sales-orders` for the same user without extra work.
+
+The sales taker is always taken from the caller's JWT; the client cannot spoof it.
+
 ## Contract tests
 
 Covers every HTTP endpoint (health, auth, catalog, line jobs) via `WebApplicationFactory` in Mock mode:

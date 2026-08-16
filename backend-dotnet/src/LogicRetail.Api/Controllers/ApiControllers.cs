@@ -213,6 +213,86 @@ public sealed class CatalogController : ControllerBase
         return Ok(ApiEnvelope.Ok(data));
     }
 
+    [HttpGet("customers")]
+    public async Task<IActionResult> Customers(
+        [FromQuery] string company,
+        [FromQuery] string? search,
+        [FromQuery] int? top,
+        CancellationToken ct)
+    {
+        User.GetUser().AssertCompanyAccess(company);
+        var rows = await _dynamics.GetCustomersAsync(company, search, Math.Clamp(top ?? 50, 1, 200), ct);
+        var data = rows.Select(c => new
+        {
+            dataAreaId = c.DataAreaId,
+            customerAccount = c.CustomerAccount,
+            name = c.Name,
+            customerGroupId = c.CustomerGroupId,
+            salesCurrencyCode = c.SalesCurrencyCode,
+            primaryPhone = c.PrimaryPhone,
+            addressCity = c.AddressCity,
+        });
+        return Ok(ApiEnvelope.Ok(data));
+    }
+
+    public sealed record CreateSalesOrderBody(
+        string? Company,
+        string? CustAccount,
+        string? InventLocationId,
+        string? InventSiteId,
+        string? CurrencyCode);
+
+    [HttpPost("sales-orders")]
+    public async Task<IActionResult> CreateSalesOrder(
+        [FromBody] CreateSalesOrderBody body,
+        CancellationToken ct)
+    {
+        var user = User.GetUser();
+        var company = string.IsNullOrWhiteSpace(body.Company) ? user.ActiveCompany : body.Company;
+        if (string.IsNullOrWhiteSpace(company))
+        {
+            throw new AppException("company is required", 400, "VALIDATION_ERROR");
+        }
+
+        if (string.IsNullOrWhiteSpace(body.CustAccount))
+        {
+            throw new AppException("custAccount is required", 400, "VALIDATION_ERROR");
+        }
+
+        user.AssertCompanyAccess(company);
+
+        var warehouse = string.IsNullOrWhiteSpace(body.InventLocationId)
+            ? user.ActiveWarehouse
+            : body.InventLocationId;
+        if (string.IsNullOrWhiteSpace(warehouse))
+        {
+            throw new AppException(
+                "inventLocationId is required when the user has no default warehouse",
+                400,
+                "WAREHOUSE_REQUIRED");
+        }
+
+        var created = await _dynamics.CreateSalesOrderHeaderAsync(
+            company,
+            body.CustAccount.Trim(),
+            warehouse,
+            body.InventSiteId,
+            user.PersonnelNumber,
+            string.IsNullOrWhiteSpace(body.CurrencyCode) ? user.Currency : body.CurrencyCode,
+            ct);
+
+        return Ok(ApiEnvelope.Ok(new
+        {
+            salesOrderNumber = created.SalesOrderNumber,
+            dataAreaId = created.DataAreaId,
+            custAccount = created.CustomerAccount,
+            inventLocationId = created.WarehouseId,
+            inventSiteId = created.SiteId,
+            currencyCode = created.CurrencyCode,
+            orderTakerPersonnelNumber = created.OrderTakerPersonnelNumber,
+        }));
+    }
+
     private static object MapHeader(Domain.SalesOrderHeader h) => new
     {
         salesId = h.SalesId,

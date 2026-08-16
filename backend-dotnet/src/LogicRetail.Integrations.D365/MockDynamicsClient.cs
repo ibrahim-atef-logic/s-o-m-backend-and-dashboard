@@ -495,6 +495,84 @@ public sealed class MockDynamicsClient : IDynamicsClient
         return Task.FromResult(warehouses);
     }
 
+    public Task<IReadOnlyList<MobileCustomer>> GetCustomersAsync(
+        string dataAreaId,
+        string? search,
+        int top,
+        CancellationToken cancellationToken = default)
+    {
+        var all = new List<MobileCustomer>
+        {
+            new()
+            {
+                DataAreaId = dataAreaId,
+                CustomerAccount = "10-10002",
+                Name = "Contoso Retail",
+                CustomerGroupId = "10",
+                SalesCurrencyCode = "SAR",
+                PrimaryPhone = "+966500000001",
+                AddressCity = "Riyadh",
+            },
+            new()
+            {
+                DataAreaId = dataAreaId,
+                CustomerAccount = "MMS021",
+                Name = "عميل نقدي ميرا مارت جدة 01",
+                CustomerGroupId = "20",
+                SalesCurrencyCode = "SAR",
+                PrimaryPhone = "+966500000002",
+                AddressCity = "Jeddah",
+            },
+        };
+
+        IEnumerable<MobileCustomer> query = all;
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(c =>
+                c.CustomerAccount.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                c.Name.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        IReadOnlyList<MobileCustomer> result = query.Take(top > 0 ? top : 50).ToList();
+        return Task.FromResult(result);
+    }
+
+    public Task<CreatedSalesOrder> CreateSalesOrderHeaderAsync(
+        string dataAreaId,
+        string customerAccount,
+        string? warehouseId,
+        string? siteId,
+        string? orderTakerPersonnelNumber,
+        string? currencyCode,
+        CancellationToken cancellationToken = default)
+    {
+        _createdOrderSeq++;
+        var salesOrderNumber = $"{dataAreaId.ToUpperInvariant()}-{_createdOrderSeq:D6}";
+        Headers.Add(new SalesOrderHeader
+        {
+            SalesId = salesOrderNumber,
+            CustAccount = customerAccount,
+            SalesName = customerAccount,
+            DataArea = dataAreaId,
+            InventLocationId = warehouseId,
+            InventSiteId = siteId,
+            WorkerSalesTaker = 5637227826,
+        });
+
+        return Task.FromResult(new CreatedSalesOrder
+        {
+            DataAreaId = dataAreaId,
+            SalesOrderNumber = salesOrderNumber,
+            CustomerAccount = customerAccount,
+            WarehouseId = warehouseId,
+            SiteId = siteId,
+            CurrencyCode = currencyCode ?? "SAR",
+            OrderTakerPersonnelNumber = orderTakerPersonnelNumber,
+        });
+    }
+
+    private int _createdOrderSeq = 900000;
+
     public Task CreateSalesOrderLineAsync(
         string dataAreaId,
         string salesOrderNumber,

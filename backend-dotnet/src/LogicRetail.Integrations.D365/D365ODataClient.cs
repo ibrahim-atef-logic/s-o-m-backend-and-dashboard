@@ -104,7 +104,10 @@ public sealed class D365ODataClient
         string entitySet,
         string? filter = null,
         CancellationToken cancellationToken = default,
-        bool crossCompany = false)
+        bool crossCompany = false,
+        string? select = null,
+        int? top = null,
+        string? orderBy = null)
     {
         return await SendWithRetryAsync<IReadOnlyList<JsonElement>>(async token =>
         {
@@ -118,6 +121,21 @@ public sealed class D365ODataClient
             if (!string.IsNullOrWhiteSpace(filter))
             {
                 query.Add($"$filter={Uri.EscapeDataString(filter)}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(select))
+            {
+                query.Add($"$select={Uri.EscapeDataString(select)}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(orderBy))
+            {
+                query.Add($"$orderby={Uri.EscapeDataString(orderBy)}");
+            }
+
+            if (top is > 0)
+            {
+                query.Add($"$top={top.Value}");
             }
 
             if (query.Count > 0)
@@ -166,6 +184,41 @@ public sealed class D365ODataClient
             }
 
             return 0;
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// POST an entity and return the created record as echoed back by D365,
+    /// which is how server-assigned values (number sequences, defaults) are read.
+    /// </summary>
+    public async Task<JsonElement> PostReturningAsync(
+        string entitySet,
+        object payload,
+        CancellationToken cancellationToken = default)
+    {
+        return await SendWithRetryAsync(async token =>
+        {
+            var json = JsonSerializer.Serialize(payload);
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/{entitySet}")
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.TryAddWithoutValidation("Accept", "application/json");
+            using var res = await _http.SendAsync(req, cancellationToken);
+            var body = await res.Content.ReadAsStringAsync(cancellationToken);
+            if (!res.IsSuccessStatusCode)
+            {
+                throw MapError(res.StatusCode, body);
+            }
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return default;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.Clone();
         }, cancellationToken);
     }
 

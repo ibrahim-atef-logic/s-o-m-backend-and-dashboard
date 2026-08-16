@@ -53,6 +53,21 @@ public interface IDynamicsClient
         string dataAreaId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<MobileCustomer>> GetCustomersAsync(
+        string dataAreaId,
+        string? search,
+        int top,
+        CancellationToken cancellationToken = default);
+
+    Task<CreatedSalesOrder> CreateSalesOrderHeaderAsync(
+        string dataAreaId,
+        string customerAccount,
+        string? warehouseId,
+        string? siteId,
+        string? orderTakerPersonnelNumber,
+        string? currencyCode,
+        CancellationToken cancellationToken = default);
+
     Task CreateSalesOrderLineAsync(
         string dataAreaId,
         string salesOrderNumber,

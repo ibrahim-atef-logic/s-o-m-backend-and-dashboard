@@ -46,8 +46,12 @@ Mobile must cache the entire `data` object. Subsequent catalog calls use `user.a
 ```http
 POST /api/v1/auth/change-password
 Authorization: Bearer <accessToken>
-{ "oldPassword": "123", "newPassword": "1234" }
+{ "oldPassword": "<current>", "newPassword": "<new>" }
 ```
+
+This writes straight through to D365 and really does change the password. Do **not**
+run it against the QA accounts (`1006`, `12344`) — their password is `123` and every
+mobile QA script depends on it. Use a throwaway activation row instead.
 
 ## Sales order creation
 

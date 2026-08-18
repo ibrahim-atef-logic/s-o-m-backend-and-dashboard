@@ -75,6 +75,13 @@ public interface IDynamicsClient
         int orderedSalesQuantity,
         CancellationToken cancellationToken = default);
 
+    Task<UpdatedSalesOrderLine> UpdateSalesOrderLineQuantityAsync(
+        string dataAreaId,
+        string salesOrderNumber,
+        string itemNumber,
+        int orderedSalesQuantity,
+        CancellationToken cancellationToken = default);
+
     Task<MobileAuthPayload> AuthenticateUserAsync(
         string personnelNumber,
         string password,

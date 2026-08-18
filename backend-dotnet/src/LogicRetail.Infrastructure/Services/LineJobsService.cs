@@ -54,15 +54,23 @@ public sealed class LineJobsService
         long workerRecId,
         string itemNumber,
         int quantity,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? ifExists = null)
     {
+        if (string.IsNullOrWhiteSpace(itemNumber))
+        {
+            throw new AppException("itemNumber is required", 400, "VALIDATION_ERROR");
+        }
+
+        itemNumber = itemNumber.Trim();
+        var existsMode = NormalizeIfExists(ifExists);
+
         if (!IsValidQty(quantity))
         {
             throw new AppException(LineJobMessages.InvalidQty.En, 400, "INVALID_QTY");
         }
 
         var header = await GetOpenSalesOrderAsync(salesId, company, workerRecId, ct);
-        // Price from header context: CustAccount / PriceGroupId + DataArea
         var price = await _dynamics.ResolvePriceAsync(
             itemNumber,
             company,
@@ -75,11 +83,51 @@ public sealed class LineJobsService
             return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.NoPrice);
         }
 
-        // Stock from header.InventLocationId → InventoryWarehouseId
         var onHand = await _dynamics.GetWarehouseOnHandAsync(itemNumber, header.InventLocationId ?? string.Empty, ct);
         if (onHand is null)
         {
             return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.NoStock);
+        }
+
+        var existing = await _dynamics.GetSalesOrderLinesAsync(salesId, company, itemNumber, ct);
+        if (existing.Count > 0)
+        {
+            var current = existing.OrderBy(l => l.LineNum).First();
+            if (existsMode == "fail")
+            {
+                PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.AlreadyExists);
+                throw DuplicateLine(salesId, itemNumber, current);
+            }
+
+            var currentQty = (int)decimal.Truncate(current.SalesQty);
+            var resulting = existsMode == "replace" ? quantity : currentQty + quantity;
+            if (resulting < 1)
+            {
+                throw new AppException(LineJobMessages.InvalidQty.En, 400, "INVALID_QTY");
+            }
+
+            if (resulting > onHand.AvailableSalesQuantity)
+            {
+                return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, resulting, LineJobMessages.QtyExceeds);
+            }
+
+            var updated = await _dynamics.UpdateSalesOrderLineQuantityAsync(
+                company,
+                salesId,
+                itemNumber,
+                resulting,
+                ct);
+            return FullSuccess(
+                salesId,
+                company,
+                workerRecId,
+                itemNumber,
+                resulting,
+                updated: true,
+                inventTransId: updated.InventoryLotId ?? current.RecordId.ToString(),
+                price.Price,
+                price.UnitId,
+                onHand.AvailableSalesQuantity);
         }
 
         if (quantity > onHand.AvailableSalesQuantity)
@@ -87,49 +135,18 @@ public sealed class LineJobsService
             return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.QtyExceeds);
         }
 
-        var existing = await _dynamics.GetSalesOrderLinesAsync(salesId, company, itemNumber, ct);
-        if (existing.Count > 0)
-        {
-            return PersistFailure(salesId, company, workerRecId, "full", itemNumber, null, quantity, LineJobMessages.AlreadyExists);
-        }
-
         await _dynamics.CreateSalesOrderLineAsync(company, salesId, itemNumber, quantity, ct);
-        var jobId = Guid.NewGuid().ToString();
-        var itemId = Guid.NewGuid().ToString();
-        _store.InsertJob(new LineJobRow
-        {
-            Id = jobId,
-            SalesId = salesId,
-            Company = company,
-            WorkerRecId = workerRecId,
-            Mode = "full",
-            Status = "completed",
-            IsFailed = false,
-        });
-        _store.InsertJobItem(new LineJobItemRow
-        {
-            Id = itemId,
-            JobId = jobId,
-            ItemNumber = itemNumber,
-            Quantity = quantity,
-            Status = "synced",
-        });
-
-        return new
-        {
-            success = true,
-            jobId,
-            item = new
-            {
-                id = itemId,
-                itemNumber,
-                quantity,
-                status = "synced",
-                price = price.Price,
-                unitId = price.UnitId,
-                availableQty = onHand.AvailableSalesQuantity,
-            },
-        };
+        return FullSuccess(
+            salesId,
+            company,
+            workerRecId,
+            itemNumber,
+            quantity,
+            updated: false,
+            inventTransId: null,
+            price.Price,
+            price.UnitId,
+            onHand.AvailableSalesQuantity);
     }
 
     public async Task<object> SubmitQuickAsync(
@@ -164,6 +181,9 @@ public sealed class LineJobsService
 
         var results = new List<object>();
         var anyFailed = false;
+        var duplicateItemNumbers = new List<string>();
+        var otherFailCount = 0;
+        var syncedCount = 0;
 
         foreach (var line in lines)
         {
@@ -174,6 +194,7 @@ public sealed class LineJobsService
             if (!IsValidQty(qty))
             {
                 anyFailed = true;
+                otherFailCount++;
                 InsertFailed(jobId, itemId, barcode, null, qty, LineJobMessages.InvalidQty);
                 results.Add(Failed(itemId, barcode, null, qty, LineJobMessages.InvalidQty));
                 continue;
@@ -183,6 +204,7 @@ public sealed class LineJobsService
             if (barcodeRow is null)
             {
                 anyFailed = true;
+                otherFailCount++;
                 InsertFailed(jobId, itemId, barcode, null, qty, LineJobMessages.NoItem);
                 results.Add(Failed(itemId, barcode, null, qty, LineJobMessages.NoItem));
                 continue;
@@ -193,8 +215,9 @@ public sealed class LineJobsService
             if (existing.Count > 0)
             {
                 anyFailed = true;
+                duplicateItemNumbers.Add(itemNumber);
                 InsertFailed(jobId, itemId, barcode, itemNumber, qty, LineJobMessages.AlreadyExists);
-                results.Add(Failed(itemId, barcode, itemNumber, qty, LineJobMessages.AlreadyExists));
+                results.Add(Failed(itemId, barcode, itemNumber, qty, LineJobMessages.AlreadyExists, "LINE_ALREADY_EXISTS"));
                 continue;
             }
 
@@ -209,6 +232,7 @@ public sealed class LineJobsService
             if (price is null)
             {
                 anyFailed = true;
+                otherFailCount++;
                 InsertFailed(jobId, itemId, barcode, itemNumber, qty, LineJobMessages.NoPrice);
                 results.Add(Failed(itemId, barcode, itemNumber, qty, LineJobMessages.NoPrice));
                 continue;
@@ -219,6 +243,7 @@ public sealed class LineJobsService
             if (onHand is null)
             {
                 anyFailed = true;
+                otherFailCount++;
                 InsertFailed(jobId, itemId, barcode, itemNumber, qty, LineJobMessages.NoStock);
                 results.Add(Failed(itemId, barcode, itemNumber, qty, LineJobMessages.NoStock));
                 continue;
@@ -227,12 +252,14 @@ public sealed class LineJobsService
             if (qty > onHand.AvailableSalesQuantity)
             {
                 anyFailed = true;
+                otherFailCount++;
                 InsertFailed(jobId, itemId, barcode, itemNumber, qty, LineJobMessages.QtyExceeds);
                 results.Add(Failed(itemId, barcode, itemNumber, qty, LineJobMessages.QtyExceeds));
                 continue;
             }
 
             await _dynamics.CreateSalesOrderLineAsync(company, salesId, itemNumber, qty, ct);
+            syncedCount++;
             _store.InsertJobItem(new LineJobItemRow
             {
                 Id = itemId,
@@ -255,6 +282,12 @@ public sealed class LineJobsService
         }
 
         _store.UpdateJob(jobId, anyFailed ? "completed_with_errors" : "completed", anyFailed);
+
+        if (duplicateItemNumbers.Count > 0 && syncedCount == 0 && otherFailCount == 0)
+        {
+            throw DuplicateLine(salesId, duplicateItemNumbers[0], null);
+        }
+
         return new { success = !anyFailed, jobId, items = results, isFailed = anyFailed };
     }
 
@@ -355,12 +388,97 @@ public sealed class LineJobsService
             CommentEn = messages.En,
         });
 
+    private object FullSuccess(
+        string salesId,
+        string company,
+        long workerRecId,
+        string itemNumber,
+        int quantity,
+        bool updated,
+        string? inventTransId,
+        decimal price,
+        string? unitId,
+        decimal availableQty)
+    {
+        var jobId = Guid.NewGuid().ToString();
+        var itemId = Guid.NewGuid().ToString();
+        _store.InsertJob(new LineJobRow
+        {
+            Id = jobId,
+            SalesId = salesId,
+            Company = company,
+            WorkerRecId = workerRecId,
+            Mode = "full",
+            Status = "completed",
+            IsFailed = false,
+        });
+        _store.InsertJobItem(new LineJobItemRow
+        {
+            Id = itemId,
+            JobId = jobId,
+            ItemNumber = itemNumber,
+            Quantity = quantity,
+            Status = "synced",
+        });
+
+        return new
+        {
+            success = true,
+            jobId,
+            salesId,
+            itemNumber,
+            quantity,
+            updated,
+            inventTransId,
+            price,
+            unitId,
+            item = new
+            {
+                id = itemId,
+                itemNumber,
+                quantity,
+                status = "synced",
+                price,
+                unitId,
+                availableQty,
+            },
+        };
+    }
+
+    private static string NormalizeIfExists(string? ifExists)
+    {
+        var value = (ifExists ?? "fail").Trim().ToLowerInvariant();
+        return value switch
+        {
+            "" or "fail" => "fail",
+            "add" => "add",
+            "replace" => "replace",
+            _ => throw new AppException(
+                "ifExists must be omit/fail, add, or replace",
+                400,
+                "VALIDATION_ERROR"),
+        };
+    }
+
+    private static AppException DuplicateLine(string salesId, string itemNumber, SalesOrderLine? current) =>
+        new(
+            $"Item {itemNumber} is already on sales order {salesId}.",
+            409,
+            "LINE_ALREADY_EXISTS")
+        {
+            ItemNumber = itemNumber,
+            SalesId = salesId,
+            ExistingLineRecId = current?.RecordId,
+            ExistingQuantity = current?.SalesQty,
+        };
+
     private static object Failed(
         string id,
         string? barcode,
         string? itemNumber,
         int quantity,
-        (string Ar, string En) messages) =>
+        (string Ar, string En) messages,
+        string? code = null) =>
         new
         {
             id,
@@ -368,6 +486,7 @@ public sealed class LineJobsService
             itemNumber,
             quantity,
             status = "failed",
+            code,
             commentAr = messages.Ar,
             commentEn = messages.En,
         };

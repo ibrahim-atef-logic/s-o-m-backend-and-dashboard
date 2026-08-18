@@ -32,7 +32,7 @@ public sealed class LineJobsEndpointTests : IClassFixture<MockApiFactory>
     }
 
     [Fact]
-    public async Task Post_full_line_duplicate_returns_422()
+    public async Task Post_full_line_duplicate_returns_409_line_already_exists()
     {
         var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
 
@@ -43,10 +43,35 @@ public sealed class LineJobsEndpointTests : IClassFixture<MockApiFactory>
             quantity = 1,
         });
 
-        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        res.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await ApiTestClient.AssertEnvelopeErrorAsync(res, "LINE_ALREADY_EXISTS");
         using var doc = await ApiTestClient.ReadJsonAsync(res);
-        doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-        doc.RootElement.GetProperty("data").GetProperty("success").GetBoolean().Should().BeFalse();
+        var error = doc.RootElement.GetProperty("error");
+        error.GetProperty("itemNumber").GetString().Should().Be("ITEM-100");
+        error.GetProperty("salesId").GetString().Should().Be("SO-000100");
+        error.GetProperty("message").GetString().Should().Contain("ITEM-100");
+        error.GetProperty("message").GetString().Should().Contain("SO-000100");
+    }
+
+    [Fact]
+    public async Task Post_full_line_ifExists_add_updates_quantity()
+    {
+        var client = await ApiTestClient.CreateAuthedClientAsync(_factory);
+        var res = await ApiTestClient.PostJsonAsync(client, "/api/v1/sales-orders/SO-000100/lines/full", new
+        {
+            company = "usmf",
+            itemNumber = "ITEM-100",
+            quantity = 2,
+            ifExists = "add",
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        await ApiTestClient.AssertEnvelopeSuccessAsync(res);
+        using var doc = await ApiTestClient.ReadJsonAsync(res);
+        var data = doc.RootElement.GetProperty("data");
+        data.GetProperty("updated").GetBoolean().Should().BeTrue();
+        data.GetProperty("quantity").GetInt32().Should().Be(4);
+        data.GetProperty("itemNumber").GetString().Should().Be("ITEM-100");
     }
 
     [Fact]

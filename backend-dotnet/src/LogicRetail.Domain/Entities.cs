@@ -104,6 +104,16 @@ public sealed class SalesOrderLine
     public string? SalesUnit { get; init; }
     public decimal LineNum { get; init; }
     public required string DataArea { get; init; }
+    public string? InventoryLotId { get; init; }
+}
+
+public sealed class UpdatedSalesOrderLine
+{
+    public required string SalesOrderNumber { get; init; }
+    public required string ItemNumber { get; init; }
+    public decimal Quantity { get; init; }
+    public string? InventoryLotId { get; init; }
+    public long RecordId { get; init; }
 }
 
 public sealed class BarcodeItem

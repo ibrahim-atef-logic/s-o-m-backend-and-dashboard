@@ -83,6 +83,23 @@ order shows up in `GET /api/v1/sales-orders` for the same user without extra wor
 
 The sales taker is always taken from the caller's JWT; the client cannot spoof it.
 
+## Adding a line
+
+```http
+POST /api/v1/sales-orders/{salesId}/lines/full
+{ "company": "mm", "itemNumber": "BG410.003", "quantity": 2, "ifExists": "fail" }
+```
+
+Default (`ifExists` omitted or `"fail"`): if that item is already on the order, the API
+returns **409 `LINE_ALREADY_EXISTS`** — not `DYNAMICS_ERROR`. Detection is
+`(salesId + dataArea + itemNumber)` against `LogicRetailSalesOrdersLines_BI` **before**
+posting to `SalesOrderLines`.
+
+`"ifExists": "add"` increases the existing line quantity (PATCH `SalesOrderLines` by
+`InventoryLotId`). `"replace"` sets the quantity. 201 on create, 200 on update.
+
+Quantity on the API is a whole integer. D365 stores `OrderedSalesQuantity` as a decimal.
+
 ## Contract tests
 
 Covers every HTTP endpoint (health, auth, catalog, line jobs) via `WebApplicationFactory` in Mock mode:

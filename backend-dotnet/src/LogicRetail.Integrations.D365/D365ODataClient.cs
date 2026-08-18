@@ -187,6 +187,31 @@ public sealed class D365ODataClient
         }, cancellationToken);
     }
 
+    public async Task PatchAsync(
+        string entityKeyPath,
+        object payload,
+        CancellationToken cancellationToken = default)
+    {
+        await SendWithRetryAsync(async token =>
+        {
+            var json = JsonSerializer.Serialize(payload);
+            using var req = new HttpRequestMessage(HttpMethod.Patch, $"{_baseUrl}/{entityKeyPath}")
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.TryAddWithoutValidation("Accept", "application/json");
+            using var res = await _http.SendAsync(req, cancellationToken);
+            var body = await res.Content.ReadAsStringAsync(cancellationToken);
+            if (!res.IsSuccessStatusCode)
+            {
+                throw MapError(res.StatusCode, body);
+            }
+
+            return 0;
+        }, cancellationToken);
+    }
+
     /// <summary>
     /// POST an entity and return the created record as echoed back by D365,
     /// which is how server-assigned values (number sequences, defaults) are read.

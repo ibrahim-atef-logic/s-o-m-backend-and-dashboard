@@ -1,3 +1,4 @@
+using LogicRetail.Application.Common;
 using LogicRetail.Application.Contracts;
 using LogicRetail.Domain;
 
@@ -592,5 +593,52 @@ public sealed class MockDynamicsClient : IDynamicsClient
             DataArea = dataAreaId,
         });
         return Task.CompletedTask;
+    }
+
+    public Task<UpdatedSalesOrderLine> UpdateSalesOrderLineQuantityAsync(
+        string dataAreaId,
+        string salesOrderNumber,
+        string itemNumber,
+        int orderedSalesQuantity,
+        CancellationToken cancellationToken = default)
+    {
+        var idx = _lines.FindIndex(l =>
+            l.SalesId == salesOrderNumber
+            && string.Equals(l.DataArea, dataAreaId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(l.ItemId.Trim(), itemNumber.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (idx < 0)
+        {
+            throw new AppException(
+                $"Item {itemNumber.Trim()} is not on sales order {salesOrderNumber}.",
+                404,
+                "LINE_NOT_FOUND")
+            {
+                ItemNumber = itemNumber.Trim(),
+                SalesId = salesOrderNumber,
+            };
+        }
+
+        var current = _lines[idx];
+        _lines[idx] = new SalesOrderLine
+        {
+            RecordId = current.RecordId,
+            SalesId = current.SalesId,
+            ItemId = current.ItemId,
+            ProductName = current.ProductName,
+            SalesQty = orderedSalesQuantity,
+            SalesUnit = current.SalesUnit,
+            LineNum = current.LineNum,
+            DataArea = current.DataArea,
+            InventoryLotId = current.InventoryLotId ?? $"LOT-{current.RecordId}",
+        };
+
+        return Task.FromResult(new UpdatedSalesOrderLine
+        {
+            SalesOrderNumber = salesOrderNumber,
+            ItemNumber = current.ItemId,
+            Quantity = orderedSalesQuantity,
+            InventoryLotId = _lines[idx].InventoryLotId,
+            RecordId = current.RecordId,
+        });
     }
 }

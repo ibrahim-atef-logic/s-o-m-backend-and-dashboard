@@ -628,6 +628,10 @@ public sealed class LiveDynamicsClient : IDynamicsClient
                     cancellationToken);
                 return;
             }
+            catch (D365ODataException ex) when (IsDuplicateLineWriteError(ex))
+            {
+                throw LineAlreadyExists(salesOrderNumber, itemNumber, ex.Message);
+            }
             catch (D365ODataException ex) when (IsItemNumberMissingWriteError(ex))
             {
                 lastItemMissing = ex;
@@ -641,6 +645,85 @@ public sealed class LiveDynamicsClient : IDynamicsClient
         throw MapDynamicsError(
             lastItemMissing
             ?? new D365ODataException("No ItemNumber write variant succeeded.", 400));
+    }
+
+    public async Task<UpdatedSalesOrderLine> UpdateSalesOrderLineQuantityAsync(
+        string dataAreaId,
+        string salesOrderNumber,
+        string itemNumber,
+        int orderedSalesQuantity,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var line = await FindWritableLineAsync(dataAreaId, salesOrderNumber, itemNumber, cancellationToken);
+            if (line is null)
+            {
+                throw new AppException(
+                    $"Item {itemNumber.Trim()} is not on sales order {salesOrderNumber}.",
+                    404,
+                    "LINE_NOT_FOUND")
+                {
+                    ItemNumber = itemNumber.Trim(),
+                    SalesId = salesOrderNumber,
+                };
+            }
+
+            var lotId = GetString(line.Value, "InventoryLotId") ?? string.Empty;
+            var key =
+                $"SalesOrderLines(dataAreaId='{ODataEscaper.String(dataAreaId)}',"
+                + $"InventoryLotId='{ODataEscaper.String(lotId)}')";
+            await _odata.PatchAsync(
+                key,
+                new { OrderedSalesQuantity = orderedSalesQuantity },
+                cancellationToken);
+
+            return new UpdatedSalesOrderLine
+            {
+                SalesOrderNumber = salesOrderNumber,
+                ItemNumber = (GetString(line.Value, "ItemNumber") ?? itemNumber).Trim(),
+                Quantity = orderedSalesQuantity,
+                InventoryLotId = lotId,
+                RecordId = GetLong(line.Value, "RecId", "RecordId"),
+            };
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch (D365ODataException ex)
+        {
+            throw MapDynamicsError(ex);
+        }
+    }
+
+    private async Task<JsonElement?> FindWritableLineAsync(
+        string dataAreaId,
+        string salesOrderNumber,
+        string itemNumber,
+        CancellationToken cancellationToken)
+    {
+        var itemFilters = ItemNumberLookupKeys(itemNumber)
+            .Select(k => $"ItemNumber eq '{ODataEscaper.String(k)}'")
+            .ToList();
+        if (itemFilters.Count == 0)
+        {
+            return null;
+        }
+
+        var itemClause = itemFilters.Count == 1 ? itemFilters[0] : $"({string.Join(" or ", itemFilters)})";
+        var filter =
+            $"dataAreaId eq '{ODataEscaper.String(dataAreaId)}' and "
+            + $"SalesOrderNumber eq '{ODataEscaper.String(salesOrderNumber)}' and "
+            + itemClause;
+        var rows = await _odata.QueryAsync(
+            "SalesOrderLines",
+            filter,
+            cancellationToken,
+            select: "dataAreaId,InventoryLotId,SalesOrderNumber,ItemNumber,OrderedSalesQuantity,LineNumber",
+            top: 1,
+            orderBy: "LineNumber");
+        return rows.Count == 0 ? null : rows[0];
     }
 
     /// <summary>Write-order keys: padded variant first (trial Released products), then trimmed.</summary>
@@ -666,6 +749,31 @@ public sealed class LiveDynamicsClient : IDynamicsClient
                    && msg.Contains("not exist", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsDuplicateLineWriteError(D365ODataException ex)
+    {
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+               || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase)
+               || msg.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static AppException LineAlreadyExists(string salesId, string itemNumber, string? d365Message = null)
+    {
+        var item = itemNumber.Trim();
+        var message = $"Item {item} is already on sales order {salesId}.";
+        if (!string.IsNullOrWhiteSpace(d365Message)
+            && !d365Message.Contains("already exist", StringComparison.OrdinalIgnoreCase))
+        {
+            message = $"{message} {d365Message}";
+        }
+
+        return new AppException(message, 409, "LINE_ALREADY_EXISTS")
+        {
+            ItemNumber = item,
+            SalesId = salesId,
+        };
+    }
+
     private static AppException MapDynamicsError(D365ODataException ex)
     {
         if (ex.StatusCode is 503 or 502)
@@ -687,6 +795,11 @@ public sealed class LiveDynamicsClient : IDynamicsClient
         if (ex.StatusCode == 429)
         {
             return new AppException("Dynamics rate limit exceeded. Retry shortly.", 429, "DYNAMICS_THROTTLED");
+        }
+
+        if (IsDuplicateLineWriteError(ex))
+        {
+            return new AppException(ex.Message, 409, "LINE_ALREADY_EXISTS");
         }
 
         return new AppException(ex.Message, ex.StatusCode >= 400 ? ex.StatusCode : 502, "DYNAMICS_ERROR");

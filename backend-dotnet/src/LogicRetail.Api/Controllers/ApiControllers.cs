@@ -318,7 +318,7 @@ public sealed class LineJobsController : ControllerBase
 
     public LineJobsController(LineJobsService jobs) => _jobs = jobs;
 
-    public sealed record FullLineBody(string Company, string ItemNumber, int Quantity);
+    public sealed record FullLineBody(string Company, string ItemNumber, int Quantity, string? IfExists);
     public sealed record QuickLine(string Barcode, int Quantity);
     public sealed record QuickBody(string Company, List<QuickLine> Lines);
 
@@ -327,9 +327,18 @@ public sealed class LineJobsController : ControllerBase
     {
         var user = User.GetUser();
         user.AssertCompanyAccess(body.Company);
-        var result = await _jobs.SubmitFullAsync(salesId, body.Company, user.WorkerRecId, body.ItemNumber, body.Quantity, ct);
+        var result = await _jobs.SubmitFullAsync(
+            salesId,
+            body.Company,
+            user.WorkerRecId,
+            body.ItemNumber,
+            body.Quantity,
+            ct,
+            body.IfExists);
         var success = result.GetType().GetProperty("success")?.GetValue(result) as bool? ?? false;
-        return StatusCode(success ? 201 : 422, ApiEnvelope.Ok(result));
+        var updated = result.GetType().GetProperty("updated")?.GetValue(result) as bool? ?? false;
+        var status = !success ? 422 : updated ? StatusCodes.Status200OK : StatusCodes.Status201Created;
+        return StatusCode(status, ApiEnvelope.Ok(result));
     }
 
     [HttpPost("lines/quick")]
